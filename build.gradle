@@ -26,12 +26,16 @@ mainClassName = "org.abimon.danganronpaRichPresence.DanganronpaRichPresenceKt"
 repositories {
     mavenCentral()
     maven { url "https://maven.abimon.org" }
+    maven { url 'https://jitpack.io' }
 }
 
 dependencies {
     compile "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
-    compile "org.abimon:Presence4K:3"
+
+    //compile "org.abimon:Presence4K:3"
     compile "org.abimon:ColonelAccess:5"
+    compile 'com.github.MinnDevelopment:Java-DiscordRPC:v1.3.0'
+
     testCompile group: 'junit', name: 'junit', version: '4.12'
 }
 

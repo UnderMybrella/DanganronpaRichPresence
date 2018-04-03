@@ -1,15 +1,30 @@
 package org.abimon.danganronpaRichPresence
 
+import club.minnced.discord.rpc.DiscordEventHandlers
+import club.minnced.discord.rpc.DiscordRPC
 import org.abimon.colonelAccess.handle.MemoryAccessor
-import org.abimon.presence4k.IPCWrapper
-import org.abimon.presence4k.RichPresenceBuilder
-import org.abimon.presence4k.objects.IPCRequest
-import org.abimon.presence4k.objects.Opcode
-import org.abimon.presence4k.richPresence
+import org.abimon.spiralRP.RichPresenceBuilder
+import java.io.File
+import java.io.InputStreamReader
 import java.util.*
-
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 fun main(args: Array<String>) {
+    if(!isDiscordRunning()) {
+        if(EnumOS.ourOS in EnumOS.UNIX) {
+            System.err.println("Error: No Discord instance detected. If you're positive Discord is running, you may be running this as root without environment variables.")
+            System.err.println("To run this with admin permissions as your user, run \"sudo -E java -jar ${EnumOS::class.java.protectionDomain.codeSource.location.path}\"")
+        } else {
+            System.err.println("Error: No Discord instance detected!")
+        }
+
+        return
+    }
+
+    val discord = DiscordRPC.INSTANCE
+
     val DR1_CLIENT_ID = "388225825385742337"
     val DR2_CLIENT_ID = "388346252976193538"
 
@@ -30,34 +45,23 @@ fun main(args: Array<String>) {
             104 to "Hajime's Cottage"
     )
 
+    discord.Discord_Initialize(DR2_CLIENT_ID, DiscordEventHandlers(), false, null)
+    discord.Discord_Register(DR2_CLIENT_ID, "http://192.168.0.24:11038/notification?name=Launching")
+
+    val updateExec = Executors.newSingleThreadScheduledExecutor { task -> Thread(task).apply { isDaemon = true } }
+    updateExec.schedule(5, TimeUnit.SECONDS) { discord.Discord_RunCallbacks() }
+
     val GAME_TITLES = arrayOf("Danganronpa Trigger Happy Havoc", "Danganronpa 2 Goodbye Despair")
 
     val (pid, danganronpa) = EnumOS.ourOS.getDRGame() ?: error("No Danganronpa game found")
 
     println("Danganronpa game found with PID $pid")
 
-    //val discord = IPCWrapper("/var/folders/rn/m4lrzjyd6h39t5xgp2n02h4w0000gp/T/discord-ipc-0", DR2_CLIENT_ID)
-//    val mac = SystemB.INSTANCE
-//
-//    val task = IntByReference()
-//    val taskResponse = KernReturn.valueOf(mac.task_for_pid(mac.mach_task_self(), DANGAN_PID!!, task))!!
-//
-//    if (taskResponse != KernReturn.KERN_SUCCESS)
-//        error("Error: Task Response $taskResponse ≠ KERN_SUCCESS; run with sudo maybe?")
-
     val memoryAccessor = MemoryAccessor.accessorForSystem(pid)
 
     var prevRoom: Int? = null
 
     while (true) {
-        //val data = PointerByReference()
-        //val size = IntByReference()
-
-        //val readResponse = KernReturn.valueOf(mac.vm_read(task.value, DR2_ROOM_ADDRESS, 4, data, size))
-
-        //if (readResponse != KernReturn.KERN_SUCCESS)
-        //    error("Error: Read Response $readResponse ≠ KERN_SUCCESS; shutting down")
-
         val roomAddress = danganronpa.roomLocations[EnumOS.ourOS] ?: break
         val (data, readResponse) = memoryAccessor.readMemory(roomAddress, 4)
 
@@ -65,15 +69,27 @@ fun main(args: Array<String>) {
             error("Error: Read Response $readResponse; data == null. Shutting down")
 
         val roomID = data.getInt(0)
-        println("[0x${roomAddress.toString(16)}] Room ID: $roomID")
         if (prevRoom != roomID) {
-//            discord.updatePresence(DANGAN_PID!!) {
-//                smallImageKey = "dr2"
-//                largeImageKey = "dr2_menu"
-//                state = "Exploring ${DR2_ROOM_NAMES[roomID] ?: "0x${roomID.toString(16)}"}"
-//            }
-            println("Exploring ${DR2_ROOM_NAMES[roomID] ?: "0x${roomID.toString(16)}"}")
+            if(roomID == 0) {
+                discord.updatePresence {
+                    smallImageKey = "dr2"
+                    largeImageKey = "dr2_menu"
+                    state = "At the main menu"
+                    partyID = UUID.randomUUID().toString()
+                    partyMax = 4
+                    partySize = 1
 
+                    joinSecret = UUID.randomUUID().toString()
+                    matchSecret = UUID.randomUUID().toString()
+                    spectateSecret = UUID.randomUUID().toString()
+                }
+            } else {
+                discord.updatePresence {
+                    smallImageKey = "dr2"
+                    largeImageKey = "dr2_menu"
+                    state = "Exploring ${DR2_ROOM_NAMES[roomID] ?: "0x${roomID.toString(16)}"}"
+                }
+            }
             prevRoom = roomID
         }
 
@@ -81,16 +97,45 @@ fun main(args: Array<String>) {
     }
 }
 
-fun IPCWrapper.updatePresence(pid: Int, init: RichPresenceBuilder.() -> Unit) {
-    queue.offer(IPCRequest(
-            Opcode.FRAME,
-            mapOf(
-                    "cmd" to "SET_ACTIVITY",
-                    "nonce" to UUID.randomUUID(),
-                    "args" to mapOf(
-                            "pid" to pid,
-                            "activity" to richPresence(init)
-                    )
-            )
-    ))
+/** OSX Only */
+fun isDiscordRunning(): Boolean {
+    val TEMP_PATH = System.getenv("XDG_RUNTIME_DIR") ?: System.getenv("TMPDIR") ?: System.getenv("TMP") ?: System.getenv("TEMP") ?: "/tmp"
+
+    for(i in 0 until 10) {
+        val socket = File("$TEMP_PATH/discord-ipc-$i")
+        if(socket.exists())
+            return true
+    }
+
+    return false
 }
+
+fun readProcess(cmd: String): List<String> {
+    val p = Runtime.getRuntime().exec(cmd)
+    p.waitFor(5, TimeUnit.SECONDS)
+
+    return InputStreamReader(p.inputStream).readLines()
+}
+
+//fun IPCWrapper.updatePresence(pid: Int, init: RichPresenceBuilder.() -> Unit) {
+//    queue.offer(IPCRequest(
+//            Opcode.FRAME,
+//            mapOf(
+//                    "cmd" to "SET_ACTIVITY",
+//                    "nonce" to UUID.randomUUID(),
+//                    "args" to mapOf(
+//                            "pid" to pid,
+//                            "activity" to richPresence(init)
+//                    )
+//            )
+//    ))
+//}
+
+fun DiscordRPC.updatePresence(init: RichPresenceBuilder.() -> Unit) {
+    val rp = RichPresenceBuilder()
+    rp.init()
+
+    this.Discord_UpdatePresence(rp.build())
+}
+
+fun ScheduledExecutorService.schedule(every: Long, unit: TimeUnit, task: () -> Unit) = scheduleAtFixedRate(task, 0, every, unit)
